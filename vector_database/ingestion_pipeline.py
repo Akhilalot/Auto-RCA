@@ -1,102 +1,97 @@
 import json
+import logging
 import os
+
 import chromadb
 from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. Configuration
-script_dir = os.path.dirname(os.path.abspath(__file__))
-file_path = os.path.join(script_dir, "..", "FAQs", "resolution_faqs.json")
-JSON_FILE = file_path
-DB_PATH = "./chroma_db"
-COLLECTION_NAME = "sre_runbooks"
-EMBEDDING_MODEL = "text-embedding-3-large" 
+logger = logging.getLogger(__name__)
 
-def build_vector_db():
-    print(f"Loading FAQs from {JSON_FILE}...")
-    
+# Configuration
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+JSON_FILE = os.path.join(SCRIPT_DIR, "..", "FAQs", "resolution_faqs.json")
+DB_PATH = os.path.join(SCRIPT_DIR, "chroma_db")
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "sre_runbooks")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+
+
+def build_vector_db() -> None:
+    logger.info("Loading FAQs from %s", JSON_FILE)
+
     if not os.path.exists(JSON_FILE):
-        raise FileNotFoundError(f"Could not find {JSON_FILE}. Please run the FAQ generator script first.")
+        raise FileNotFoundError(f"Could not find {JSON_FILE}. Run the FAQ generator script first.")
 
-    with open(JSON_FILE, "r") as f:
+    with open(JSON_FILE, "r", encoding="utf-8") as f:
         faqs = json.load(f)
 
-    # 2. Prepare the data for ChromaDB
-    documents =[]
+    # Prepare the data for ChromaDB
+    documents = []
     metadatas = []
-    ids =[]
+    ids = []
 
     for faq in faqs:
-        # Concatenate into a rich text block so the embedding captures full context
         content = f"Category: {faq['category']}\nQuestion: {faq['question']}\nResolution: {faq['answer']}"
         documents.append(content)
-        
-        # Store metadata for hybrid filtering (e.g., if the agent only wants to search "Database" issues)
         metadatas.append({
             "category": faq["category"],
-            "faq_id": faq["faq_id"]
+            "faq_id": faq["faq_id"],
         })
-        
         ids.append(faq["faq_id"])
 
-    print(f"Prepared {len(documents)} documents for indexing.")
+    logger.info("Prepared %d documents for indexing", len(documents))
 
-    # 3. Initialize ChromaDB Persistent Client
-    print(f"Initializing ChromaDB persistent client at {DB_PATH}...")
+    # Initialize ChromaDB Persistent Client
+    logger.info("Initializing ChromaDB persistent client at %s", DB_PATH)
     client = chromadb.PersistentClient(path=DB_PATH)
 
-    # 4. Define the OpenAI Embedding Function
-    print(f"Using OpenAI embedding model: {EMBEDDING_MODEL}...")
+    # Define the OpenAI Embedding Function
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise EnvironmentError("OPENAI_API_KEY is not set")
+
+    logger.info("Using OpenAI embedding model: %s", EMBEDDING_MODEL)
     openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-        api_key=os.environ["OPENAI_API_KEY"],
-        model_name=EMBEDDING_MODEL
+        api_key=api_key,
+        model_name=EMBEDDING_MODEL,
     )
 
-    # 5. Create (or get) the collection
-    # We use get_or_create so you can run this script multiple times safely
+    # Create (or get) the collection
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=openai_ef,
-        metadata={"hnsw:space": "cosine"} # Cosine similarity is best for text embeddings
+        metadata={"hnsw:space": "cosine"},
     )
 
-    # 6. Upsert data into the database
-    print("Embedding and indexing documents into ChromaDB. This may take a few seconds...")
+    # Upsert data into the database
+    logger.info("Embedding and indexing documents into ChromaDB ...")
     collection.upsert(
         documents=documents,
         metadatas=metadatas,
-        ids=ids
+        ids=ids,
     )
-    print("✅ Successfully built and persisted the ChromaDB vector index!\n")
+    logger.info("Successfully built and persisted the ChromaDB vector index")
 
-    # ==========================================
-    # TEST THE RAG SEARCH FOR THE AI AGENT
-    # ==========================================
-    print("--- Testing the Vector Search ---")
-    
-    # Simulating what the Resolver Agent will ask based on the logs we generated earlier
-    agent_query = "We had a deployment and now processPayment is failing with high payment gateway latency and PaymentGatewayTimeoutException."
-    print(f"Agent Query: '{agent_query}'\n")
-
-    results = collection.query(
-        query_texts=[agent_query],
-        n_results=1 # We just want the absolute best match
+    # Test the RAG search
+    logger.info("--- Testing vector search ---")
+    agent_query = (
+        "We had a deployment and now processPayment is failing "
+        "with high payment gateway latency and PaymentGatewayTimeoutException."
     )
+    logger.info("Agent Query: %s", agent_query)
 
-    # Print the results
-    if results['documents'][0]:
-        best_match = results['documents'][0][0]
-        match_id = results['ids'][0][0]
-        distance = results['distances'][0][0]
-        
-        print(f"🔍 Top Result Found ({match_id}) - Distance score: {distance:.4f}")
-        print("-" * 40)
-        print(best_match)
-        print("-" * 40)
+    results = collection.query(query_texts=[agent_query], n_results=1)
+
+    if results["documents"][0]:
+        best_match = results["documents"][0][0]
+        match_id = results["ids"][0][0]
+        distance = results["distances"][0][0]
+        logger.info("Top result: %s (distance=%.4f)", match_id, distance)
+        logger.info("Content: %s", best_match[:200])
     else:
-        print("No results found.")
+        logger.warning("No results found for test query")
 
 if __name__ == "__main__":
     build_vector_db()

@@ -1,17 +1,21 @@
 import json
+import logging
 import random
 
-def generate_natural_faqs():
-    faqs =[]
+logger = logging.getLogger(__name__)
+
+
+def generate_natural_faqs() -> list[dict]:
+    faqs = []
     faq_counter = 1
 
-    def add_faq(category, question, answer):
+    def add_faq(category: str, question: str, answer: str) -> None:
         nonlocal faq_counter
         faqs.append({
             "faq_id": f"FAQ-{faq_counter:03d}",
             "category": category,
             "question": question,
-            "answer": answer
+            "answer": answer,
         })
         faq_counter += 1
 
@@ -49,21 +53,21 @@ def generate_natural_faqs():
     # 3. KUBERNETES FAQS (Using varied templates)
     # ==========================================
     k8s_issues = {
-        "OOMKilled":[
+        "OOMKilled": [
             "What should I do if the {svc} pod keeps getting OOMKilled?",
             "I'm seeing an OOMKilled status for {svc}. How do we resolve this?",
             "The {svc} container is crashing with Out Of Memory errors."
         ],
-        "CrashLoopBackOff":[
+        "CrashLoopBackOff": [
             "Why is {svc} stuck in CrashLoopBackOff?",
             "The {svc} deployment is failing to start and shows CrashLoopBackOff.",
-            "Steps to debug a CrashLoopBackOff state on the {svc} pod?"
+            "Steps to debug a CrashLoopBackOff state on the {svc} pod?",
         ],
-        "ImagePullBackOff":[
+        "ImagePullBackOff": [
             "Kubernetes is throwing ImagePullBackOff for the {svc} deployment.",
             "I can't get {svc} to deploy, it just says ImagePullBackOff. Fixes?",
-            "What causes ImagePullBackOff on {svc} and how do I bypass it?"
-        ]
+            "What causes ImagePullBackOff on {svc} and how do I bypass it?",
+        ],
     }
     
     k8s_answers = {
@@ -109,7 +113,7 @@ def generate_natural_faqs():
     # ==========================================
     # 5. THIRD-PARTY API FAQS (Varied phrasing)
     # ==========================================
-    third_party_apis =["Stripe", "PayPal", "FedEx", "UPS", "Mailgun", "Twilio", "Avalara", "SendGrid"]
+    third_party_apis = ["Stripe", "PayPal", "FedEx", "UPS", "Mailgun", "Twilio", "Avalara", "SendGrid"]
     
     for api in third_party_apis:
         add_faq(
@@ -135,7 +139,7 @@ def generate_natural_faqs():
     # ==========================================
     # 6. PAD WITH GENERAL SRE RUNBOOKS
     # ==========================================
-    general_topics =["Kafka consumer lag", "Elasticsearch heap issues", "CloudFront cache invalidation", "SSL Certificate expiry", "DNS propagation delays"]
+    general_topics = ["Kafka consumer lag", "Elasticsearch heap issues", "CloudFront cache invalidation", "SSL Certificate expiry", "DNS propagation delays"]
     
     for topic in general_topics:
         add_faq(
@@ -156,9 +160,10 @@ def generate_natural_faqs():
     return faqs[:250]
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     faqs_data = generate_natural_faqs()
 
-    with open("resolution_faqs.json", "w") as f:
+    with open("resolution_faqs.json", "w", encoding="utf-8") as f:
         json.dump(faqs_data, f, indent=2)
 
-    print(f"Successfully generated {len(faqs_data)} natural-language FAQs.")
+    logger.info("Successfully generated %d natural-language FAQs.", len(faqs_data))

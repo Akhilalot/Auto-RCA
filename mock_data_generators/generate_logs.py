@@ -1,7 +1,10 @@
 import json
+import logging
 import random
 import uuid
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 # Configurations
 NUM_APP_LOGS = 1000
@@ -11,9 +14,9 @@ TOTAL_SECONDS_IN_DAY = 86400
 
 SERVICE_NAME = "checkout-service"
 
-METHODS =["validateCart", "calculateTaxes", "applyDiscount", "processPayment", "updateInventory", "confirmOrder"]
-METRICS =["cpu_utilization_percent", "memory_usage_mb", "payment_gateway_latency_ms", "db_query_latency_ms", "active_checkout_sessions", "checkout_error_rate_percent"]
-STAGES  =["build", "test", "security_scan", "deploy_staging", "deploy_production"]
+METHODS = ["validateCart", "calculateTaxes", "applyDiscount", "processPayment", "updateInventory", "confirmOrder"]
+METRICS = ["cpu_utilization_percent", "memory_usage_mb", "payment_gateway_latency_ms", "db_query_latency_ms", "active_checkout_sessions", "checkout_error_rate_percent"]
+STAGES = ["build", "test", "security_scan", "deploy_staging", "deploy_production"]
 
 # Define timeline bounds
 start_time = datetime.utcnow() - timedelta(days=1)
@@ -22,10 +25,10 @@ start_time = datetime.utcnow() - timedelta(days=1)
 incident_start = start_time + timedelta(hours=12)
 incident_end = incident_start + timedelta(minutes=45)
 
-def is_incident(t):
+def is_incident(t: datetime) -> bool:
     return incident_start <= t <= incident_end
 
-def get_app_message(method, level):
+def get_app_message(method: str, level: str) -> str:
     if level in ["INFO", "DEBUG"]:
         # Expanded variety of INFO messages for a realistic application
         info_msgs = {
@@ -86,10 +89,10 @@ def get_app_message(method, level):
         }
         return errs.get(method, "Internal Server Error.")
 
-def generate_correlated_logs():
-    app_logs =[]
+def generate_correlated_logs() -> tuple[list, list, list]:
+    app_logs = []
     telemetry_logs = []
-    cicd_logs =[]
+    cicd_logs = []
 
     # 1. Generate Application Logs
     app_step = TOTAL_SECONDS_IN_DAY / NUM_APP_LOGS
@@ -177,15 +180,16 @@ def generate_correlated_logs():
     return app_logs, telemetry_logs, cicd_logs
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     app_logs, telemetry_logs, cicd_logs = generate_correlated_logs()
 
-    with open("application_logs.json", "w") as f:
+    with open("application_logs.json", "w", encoding="utf-8") as f:
         json.dump(app_logs, f, indent=2)
-    
-    with open("telemetry_logs.json", "w") as f:
+
+    with open("telemetry_logs.json", "w", encoding="utf-8") as f:
         json.dump(telemetry_logs, f, indent=2)
 
-    with open("cicd_logs.json", "w") as f:
+    with open("cicd_logs.json", "w", encoding="utf-8") as f:
         json.dump(cicd_logs, f, indent=2)
 
-    print(f"Successfully generated 3 synchronized log files.")
+    logger.info("Successfully generated 3 synchronized log files.")

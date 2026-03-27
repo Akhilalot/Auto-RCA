@@ -1,17 +1,20 @@
 # main.py — AgenticOps FastAPI Entry Point
 
-import os
 import logging
+import os
+import time
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from graph import graph
 
-logger = logging.getLogger("AgenticOps")
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AgenticOps API",
@@ -21,12 +24,12 @@ app = FastAPI(
 
 
 class RequestModel(BaseModel):
-    time_stamp: str
-    issue: str
+    time_stamp: str = Field(..., min_length=1, max_length=100)
+    issue: str = Field(..., min_length=1, max_length=5000)
 
 
 @app.get("/")
-def home():
+async def home() -> dict:
     return {
         "message": "AgenticOps API is running",
         "endpoints": {
@@ -37,7 +40,7 @@ def home():
 
 
 @app.get("/health")
-def health():
+async def health() -> dict:
     return {"status": "healthy", "agents": ["commander", "metrics", "logs", "cicd", "resolver", "reporter"]}
 
 
@@ -45,21 +48,32 @@ def health():
 async def run_agent(request: RequestModel):
     """
     Run the full AgenticOps multi-agent pipeline.
-    
+
     The pipeline flow:
-      commander → metrics → logs → cicd → resolver → reporter → END
-    
+      commander -> metrics -> logs -> cicd -> resolver -> reporter -> END
+
     Each agent analyzes a different aspect of the system and contributes
     to the final incident report.
     """
-    logger.info("POST /run-agent called | issue=%s | time_stamp=%s", request.issue, request.time_stamp)
+    start_time = time.monotonic()
+    logger.info(
+        "POST /run-agent | issue=%s | time_stamp=%s",
+        request.issue[:120],
+        request.time_stamp,
+    )
     try:
         result = await graph.ainvoke({
             "issue": request.issue,
             "time_stamp": request.time_stamp,
             "agents_called": [],
+            "iteration_count": 0,
         })
-        logger.info("Pipeline completed | agents_called=%s", result.get("agents_called", []))
+        elapsed = round(time.monotonic() - start_time, 2)
+        logger.info(
+            "Pipeline completed | agents_called=%s | elapsed=%ss",
+            result.get("agents_called", []),
+            elapsed,
+        )
 
         return JSONResponse(
             status_code=200,
@@ -78,11 +92,19 @@ async def run_agent(request: RequestModel):
                 },
             },
         )
-    except Exception as e:
-        logger.exception("Pipeline failed: %s", e)
+    except Exception as exc:
+        elapsed = round(time.monotonic() - start_time, 2)
+        logger.exception(
+            "Pipeline failed | elapsed=%ss | error=%s",
+            elapsed,
+            exc,
+        )
         return JSONResponse(
             status_code=500,
-            content={"error": str(e), "type": type(e).__name__},
+            content={
+                "status": "error",
+                "message": "Internal pipeline error. Check server logs for details.",
+            },
         )
 
 

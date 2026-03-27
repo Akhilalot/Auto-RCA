@@ -1,6 +1,9 @@
+import os
+
 import requests
-url="http://testignore-fredhca8d8erfhdc.centralindia-01.azurewebsites.net/"
-#url="http://localhost:8000/"
+
+url = os.getenv("AGENTICOPS_URL", "http://localhost:8000/")
+
 response = requests.post(
     f"{url}run-agent",
     json={

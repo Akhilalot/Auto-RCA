@@ -30,11 +30,11 @@ AgenticOps is a multi-agent AI system for IT Operations that autonomously detect
                                 ▼
               ┌─────────────────────────────────────┐
               │          COMMANDER AGENT             │
-              │  (Deterministic Orchestrator)        │
+              │  (LLM-based Autonomous Orchestrator) │
               │                                     │
-              │  Enforces fixed pipeline sequence:  │
-              │  metrics → logs → cicd → resolver   │
-              │  → reporter → END                   │
+              │  Uses structured LLM output to       │
+              │  decide next agent based on state.   │
+              │  Can reorder, skip, or prioritize.   │
               └──────────────┬──────────────────────┘
                              │
            ┌─────────────────┼─────────────────┐
@@ -68,22 +68,47 @@ AgenticOps is a multi-agent AI system for IT Operations that autonomously detect
 
 ## Pipeline Sequence
 
-The Commander agent enforces a **fixed, deterministic pipeline**. Each agent runs in order, reports back to the Commander, and the Commander routes to the next agent.
+The Commander agent uses an **LLM with structured output** to autonomously decide routing. Each agent runs, reports back to the Commander, and the Commander decides the optimal next step — including **re-invoking agents with targeted follow-up directives** when it spots gaps or leads in the investigation.
 
+### Standard Flow (no re-invocations needed)
 ```
-START → Commander → Metrics Agent → Commander → Logs Agent → Commander
-      → CI/CD Agent → Commander → Resolver Agent → Commander
-      → Reporter Agent → END
+START → Commander → Metrics → Commander → Logs → Commander
+      → CI/CD → Commander → Resolver → Commander
+      → Reporter → Commander → END
 ```
 
-| Step | Agent            | Purpose                                       | Returns to   |
-|------|------------------|-----------------------------------------------|--------------|
-| 1    | **Commander**    | Routes to the next unvisited agent             | Next agent   |
-| 2    | **Metrics**      | Analyzes telemetry data for anomalies          | Commander    |
-| 3    | **Logs**         | Analyzes application error/warning logs        | Commander    |
-| 4    | **CI/CD**        | Investigates pipeline failures & deployments   | Commander    |
-| 5    | **Resolver**     | Searches FAQs + web for mitigation steps       | Commander    |
-| 6    | **Reporter**     | Generates final HTML incident report & emails  | END          |
+### Re-invocation Flow (commander spots a lead)
+```
+START → Commander → Metrics → Commander → Logs → Commander
+      → CI/CD → Commander
+      → Metrics (re-invoked: "Check if CPU spike at 14:05 matches the deploy timestamp")
+      → Commander → Resolver → Commander
+      → Reporter → Commander → END
+```
+
+### Skipped Agent Flow (no deployment relevance)
+```
+START → Commander → Metrics → Commander → Logs → Commander
+      → Resolver → Commander → Reporter → Commander → END
+```
+
+| Agent            | Purpose                                       | Returns to   |
+|------------------|-----------------------------------------------|--------------|
+| **Commander**    | LLM decides next agent + directive based on state | Next agent   |
+| **Metrics**      | Analyzes telemetry data for anomalies          | Commander    |
+| **Logs**         | Analyzes application error/warning logs        | Commander    |
+| **CI/CD**        | Investigates pipeline failures & deployments   | Commander    |
+| **Resolver**     | Searches FAQs + web for mitigation steps       | Commander    |
+| **Reporter**     | Generates final HTML incident report & emails  | Commander    |
+
+### Commander Autonomy & Constraints
+
+| The Commander CAN                                          | The Commander CANNOT                                |
+|------------------------------------------------------------|-----------------------------------------------------|
+| Re-invoke an agent with a targeted follow-up directive     | Call resolver before metrics + logs reports exist    |
+| Skip `cicd` if evidence rules out deployment causes        | Call reporter before resolver has run                |
+| Spot gaps/leads in reports and send agents back to dig deeper | Exceed max iterations (safety cap = 10)           |
+| Route to `__end__` once final report is generated          | Re-invoke without a specific, different directive    |
 
 ---
 
@@ -101,8 +126,11 @@ All agents read from and write to a shared `AgentState` dictionary:
 | `cicd_report`      | `str`        | CI/CD Agent     | Pipeline & deployment analysis findings    |
 | `resolution_report`| `str`        | Resolver Agent  | Recommended mitigation steps               |
 | `final_report`     | `str`        | Reporter Agent  | Final formatted HTML report                |
-| `agents_called`    | `list[str]`  | Commander       | Tracks which agents have executed           |
+| `agents_called`    | `list[str]`  | Commander       | Tracks agent invocation history (may contain duplicates on re-invoke) |
+| `iteration_count`  | `int`        | Commander       | Number of commander iterations (for safety cap)    |
 | `next_agent`       | `str`        | Commander       | The next agent to be invoked               |
+| `commander_reasoning` | `str`     | Commander       | LLM's reasoning for its latest routing decision |
+| `commander_directive` | `str`     | Commander       | Targeted instruction for the next agent ("initial_analysis" or follow-up) |
 
 ---
 
@@ -110,10 +138,17 @@ All agents read from and write to a shared `AgentState` dictionary:
 
 ### 1. Commander Agent
 
-- **Type:** Deterministic router (no LLM calls)
-- **Role:** Enforces the fixed agent sequence by checking `agents_called` and routing to the next unvisited agent in the pipeline.
-- **Sequence:** `["metrics", "logs", "cicd", "resolver", "reporter"]`
-- **Logic:** Iterates through the sequence; the first agent not yet in `agents_called` is the next destination. When all agents have run, routes to `__end__`.
+- **Type:** LLM-based autonomous orchestrator (structured output, no tools)
+- **Role:** Uses an LLM call with `with_structured_output(CommanderDecision)` to decide the next agent and provide a directive.
+- **Input:** A state summary including: issue, agent call history, and **truncated report contents** (500 chars each) so the commander can spot gaps and leads.
+- **Output Schema:** `CommanderDecision { reasoning: str, next_agent: Literal[...], directive: str }`
+- **Key capability — Re-invocation:** The commander MAY call an agent that has already run, providing a specific `directive` that tells the agent what to focus on differently. On first invocation, the directive is `"initial_analysis"`. On re-invocation, it's a targeted follow-up (e.g., `"Check for NullPointerException between 14:00-14:30 on payment-service"`).
+- **Dependency constraints (enforced via system prompt):**
+  - `resolver` requires `metrics_report` and `logs_report` to exist
+  - `reporter` requires `resolution_report` to exist
+  - `reporter` should only be called once, as the final step
+- **Safety:** Hard cap of 10 commander iterations to prevent infinite loops
+- **State routing:** Uses `Command(goto=next_agent)` — no `messages` field needed; routes entirely on structured state variables.
 
 ### 2. Metrics Agent (ReAct)
 
@@ -269,7 +304,7 @@ Resolution: {answer}
 |------------------|-----------------------------------------|
 | Orchestration    | LangGraph (StateGraph)                  |
 | Agent Framework  | LangChain ReAct agents                  |
-| LLM              | OpenAI GPT-5.2                          |
+| LLM              | OpenAI GPT-5.4                          |
 | API Server       | FastAPI + Uvicorn                       |
 | Vector Database  | ChromaDB (persistent, cosine similarity)|
 | Embeddings       | OpenAI `text-embedding-3-large`         |

@@ -1,7 +1,18 @@
-
-venv
+# Virtual environments
+venv/
 .env
-.venv
-.vscode
-__pycache__
-vector_database/chroma_db
+.venv/
+
+# IDE
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Data (regenerate via ingestion pipeline)
+vector_database/chroma_db/
+
+# OS
+.DS_Store
