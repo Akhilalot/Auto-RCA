@@ -68,33 +68,47 @@ AgenticOps is a multi-agent AI system for IT Operations that autonomously detect
 
 ## Pipeline Sequence
 
-The Commander agent uses an **LLM with structured output** to autonomously decide routing. Each agent runs, reports back to the Commander, and the Commander decides the optimal next step — including **re-invoking agents with targeted follow-up directives** when it spots gaps or leads in the investigation.
+The Commander agent operates in two phases:
+
+1. **Phase 1 — Parallel Data Gathering:** On first invocation, the Commander deterministically fans out to **metrics, logs, and cicd agents in parallel** (no LLM call). All three run concurrently, each writing to its own state key. When all three complete, their updates merge and the Commander is invoked again.
+
+2. **Phase 2 — Autonomous Orchestration:** The Commander uses an **LLM with structured output** to analyze the collected reports and decide the next step — including **re-invoking agents with targeted follow-up directives** when it spots gaps or leads.
 
 ### Standard Flow (no re-invocations needed)
 ```
-START → Commander → Metrics → Commander → Logs → Commander
-      → CI/CD → Commander → Resolver → Commander
-      → Reporter → Commander → END
+START → Commander ──┬── Metrics ──┐
+                    ├── Logs    ──┤ (parallel)
+                    └── CI/CD   ──┘
+                          │
+                    Commander (LLM) → Resolver → Commander
+                    → Reporter → Commander → END
 ```
 
 ### Re-invocation Flow (commander spots a lead)
 ```
-START → Commander → Metrics → Commander → Logs → Commander
-      → CI/CD → Commander
-      → Metrics (re-invoked: "Check if CPU spike at 14:05 matches the deploy timestamp")
-      → Commander → Resolver → Commander
-      → Reporter → Commander → END
+START → Commander ──┬── Metrics ──┐
+                    ├── Logs    ──┤ (parallel)
+                    └── CI/CD   ──┘
+                          │
+                    Commander (LLM)
+                    → Metrics (re-invoked: "Check if CPU spike at 14:05 matches deploy")
+                    → Commander → Resolver → Commander
+                    → Reporter → Commander → END
 ```
 
-### Skipped Agent Flow (no deployment relevance)
+### Minimal Flow (no deployment relevance, no re-invocations)
 ```
-START → Commander → Metrics → Commander → Logs → Commander
-      → Resolver → Commander → Reporter → Commander → END
+START → Commander ──┬── Metrics ──┐
+                    ├── Logs    ──┤ (parallel)
+                    └── CI/CD   ──┘
+                          │
+                    Commander (LLM) → Resolver → Commander
+                    → Reporter → Commander → END
 ```
 
 | Agent            | Purpose                                       | Returns to   |
 |------------------|-----------------------------------------------|--------------|
-| **Commander**    | LLM decides next agent + directive based on state | Next agent   |
+| **Commander**    | Parallel fan-out (1st) then LLM-based routing (2nd+) | Next agent(s) |
 | **Metrics**      | Analyzes telemetry data for anomalies          | Commander    |
 | **Logs**         | Analyzes application error/warning logs        | Commander    |
 | **CI/CD**        | Investigates pipeline failures & deployments   | Commander    |
@@ -138,17 +152,18 @@ All agents read from and write to a shared `AgentState` dictionary:
 
 ### 1. Commander Agent
 
-- **Type:** LLM-based autonomous orchestrator (structured output, no tools)
-- **Role:** Uses an LLM call with `with_structured_output(CommanderDecision)` to decide the next agent and provide a directive.
-- **Input:** A state summary including: issue, agent call history, and **truncated report contents** (500 chars each) so the commander can spot gaps and leads.
+- **Type:** Hybrid — deterministic parallel fan-out (1st invocation) + LLM-based autonomous orchestrator (subsequent)
+- **Phase 1 (iteration 0):** Deterministically fans out to `metrics`, `logs`, and `cicd` in **parallel** using `Command(goto=["metrics", "logs", "cicd"])`. No LLM call. All three agents run concurrently, each writing to its own state key. When all complete, their updates merge and the commander is invoked again.
+- **Phase 2 (iteration 1+):** Uses an LLM call with `with_structured_output(CommanderDecision)` to analyze the collected reports and decide the next agent + directive.
+- **Input (Phase 2):** A state summary including: issue, agent call history, and **truncated report contents** (500 chars each) so the commander can spot gaps and leads.
 - **Output Schema:** `CommanderDecision { reasoning: str, next_agent: Literal[...], directive: str }`
-- **Key capability — Re-invocation:** The commander MAY call an agent that has already run, providing a specific `directive` that tells the agent what to focus on differently. On first invocation, the directive is `"initial_analysis"`. On re-invocation, it's a targeted follow-up (e.g., `"Check for NullPointerException between 14:00-14:30 on payment-service"`).
+- **Key capability — Re-invocation:** The commander MAY call an agent that has already run, providing a specific `directive` that tells the agent what to focus on differently. On re-invocation, the directive is a targeted follow-up (e.g., `"Check for NullPointerException between 14:00-14:30 on payment-service"`).
 - **Dependency constraints (enforced via system prompt):**
-  - `resolver` requires `metrics_report` and `logs_report` to exist
+  - `resolver` requires `metrics_report`, `logs_report`, and `cicd_report` to exist
   - `reporter` requires `resolution_report` to exist
   - `reporter` should only be called once, as the final step
 - **Safety:** Hard cap of 10 commander iterations to prevent infinite loops
-- **State routing:** Uses `Command(goto=next_agent)` — no `messages` field needed; routes entirely on structured state variables.
+- **State routing:** Uses `Command(goto=...)` — no `messages` field needed; routes entirely on structured state variables. Supports both single goto (string) and parallel fan-out (list).
 
 ### 2. Metrics Agent (ReAct)
 

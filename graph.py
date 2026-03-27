@@ -90,7 +90,8 @@ commander_llm = llm.with_structured_output(CommanderDecision)
 
 COMMANDER_SYSTEM_PROMPT = """You are the Commander agent orchestrating an IT incident investigation pipeline.
 
-Your job: analyze the current investigation state and decide which agent to invoke next.
+The initial data-gathering phase (metrics, logs, cicd) has already been executed IN PARALLEL.
+You are now being invoked to analyze the results and decide what to do next.
 
 Available agents:
 - metrics : Analyzes CPU, memory, latency, error rates, active sessions from telemetry.
@@ -100,7 +101,7 @@ Available agents:
 - reporter: Generates the final HTML incident report and sends email.
 
 Dependency constraints (MUST follow):
-- resolver REQUIRES metrics_report AND logs_report to exist.
+- resolver REQUIRES metrics_report AND logs_report AND cicd_report to exist.
 - reporter REQUIRES resolution_report to exist.
 - reporter should only be called once, as the final step before __end__.
 
@@ -112,12 +113,12 @@ Your autonomy:
   * Re-invoke logs after resolver suggests a specific error class, to search for that pattern specifically.
   * Re-invoke resolver after a re-invoked agent provides new findings.
 - You SHOULD NOT re-invoke just to repeat the same work. Only re-invoke with a specific, different directive.
-- You MAY skip cicd if the evidence clearly rules out deployment-related causes.
+- You MAY skip straight to resolver if the three analysis reports are already sufficient.
 - Route to __end__ once reporter has generated the final report.
 
 Directive field:
-- On first invocation of any agent, set directive to 'initial_analysis'.
-- On re-invocation, provide a SPECIFIC follow-up question or focus area.
+- On first invocation of resolver/reporter (which haven't run yet), set directive to 'initial_analysis'.
+- On re-invocation of any agent, provide a SPECIFIC follow-up question or focus area.
   The agent will receive this directive and tailor its analysis accordingly.
 
 Be decisive. If the reports are sufficient for resolution, move to resolver rather than re-investigating."""
@@ -135,9 +136,13 @@ async def commander_agent(state: AgentState) -> Command[Literal[
 ]]:
     """
     The Commander uses an LLM to autonomously decide routing.
-    It reads the current reports (truncated) and agent history,
-    then decides the next step — including potential re-invocations
-    with targeted follow-up directives.
+
+    First invocation: fans out to metrics, logs, and cicd in PARALLEL
+    (no LLM call needed — always gather all raw data first).
+
+    Subsequent invocations: reads the current reports (truncated) and
+    agent history, then decides the next step — including potential
+    re-invocations with targeted follow-up directives.
     """
     called = state.get("agents_called", [])
     iteration = state.get("iteration_count", 0)
@@ -148,6 +153,21 @@ async def commander_agent(state: AgentState) -> Command[Literal[
         logger.warning("Commander hit max iterations (%d), forcing __end__", MAX_COMMANDER_ITERATIONS)
         return Command(update={"next_agent": "__end__"}, goto="__end__")
 
+    # ── First invocation: fan out to all three analysis agents in parallel ──
+    if iteration == 0:
+        logger.info("Commander: first invocation — fanning out to metrics, logs, cicd in parallel")
+        return Command(
+            update={
+                "next_agent": "parallel:metrics,logs,cicd",
+                "agents_called": ["metrics", "logs", "cicd"],
+                "iteration_count": 1,
+                "commander_reasoning": "Initial invocation — launching all three analysis agents in parallel for comprehensive data gathering.",
+                "commander_directive": "initial_analysis",
+            },
+            goto=["metrics", "logs", "cicd"],
+        )
+
+    # ── Subsequent invocations: LLM decides next step ──
     # Build state summary with truncated report contents so the LLM can spot gaps
     metrics_report = state.get("metrics_report", "")
     logs_report = state.get("logs_report", "")
@@ -235,6 +255,8 @@ async def metrics_agent(state: AgentState) -> Command[Literal["commander"]]:
                 f"Previous metrics analysis is available. The Commander has re-invoked you with a specific directive:\n"
                 f">>> {directive}\n\n"
                 f"Previous metrics report:\n{state.get('metrics_report', 'N/A')}\n\n"
+                f"Logs Report (for correlation):\n{state.get('logs_report', 'N/A')}\n\n"
+                f"CI/CD Report (for correlation):\n{state.get('cicd_report', 'N/A')}\n\n"
                 f"Focus your analysis on the directive above. Use your tools to investigate further."
             )
         response = await metrics_agent_app.ainvoke({"messages": [("user", input_message)]})
@@ -278,8 +300,7 @@ async def logs_agent(state: AgentState) -> Command[Literal["commander"]]:
         if directive == "initial_analysis":
             input_message = (
                 f"Incident under investigation: {state.get('issue', 'Analyze application logs')}\n\n"
-                f"Metrics Analysis (for correlation):\n{state.get('metrics_report', 'N/A')}\n\n"
-                f"Analyze the application logs using your tools."
+                f"Analyze the application logs using your tools. Identify error patterns, failure modes, and timelines."
             )
         else:
             input_message = (
@@ -287,7 +308,8 @@ async def logs_agent(state: AgentState) -> Command[Literal["commander"]]:
                 f"The Commander has re-invoked you with a specific directive:\n"
                 f">>> {directive}\n\n"
                 f"Previous logs report:\n{state.get('logs_report', 'N/A')}\n\n"
-                f"Metrics Analysis:\n{state.get('metrics_report', 'N/A')}\n\n"
+                f"Metrics Analysis (for correlation):\n{state.get('metrics_report', 'N/A')}\n\n"
+                f"CI/CD Report (for correlation):\n{state.get('cicd_report', 'N/A')}\n\n"
                 f"Focus your analysis on the directive above. Use your tools to investigate further."
             )
         response = await logs_agent_app.ainvoke({"messages": [("user", input_message)]})
@@ -330,9 +352,7 @@ async def cicd_agent(state: AgentState) -> Command[Literal["commander"]]:
         if directive == "initial_analysis":
             input_message = (
                 f"Incident under investigation: {state.get('issue', 'Analyze CI/CD pipelines')}\n\n"
-                f"Metrics Report:\n{state.get('metrics_report', 'N/A')}\n\n"
-                f"Logs Report:\n{state.get('logs_report', 'N/A')}\n\n"
-                f"Analyze the CI/CD pipelines using your tools."
+                f"Analyze the CI/CD pipelines using your tools. Check for failed deployments, rollbacks, and suspicious commits."
             )
         else:
             input_message = (
@@ -340,8 +360,8 @@ async def cicd_agent(state: AgentState) -> Command[Literal["commander"]]:
                 f"The Commander has re-invoked you with a specific directive:\n"
                 f">>> {directive}\n\n"
                 f"Previous CI/CD report:\n{state.get('cicd_report', 'N/A')}\n\n"
-                f"Metrics Report:\n{state.get('metrics_report', 'N/A')}\n\n"
-                f"Logs Report:\n{state.get('logs_report', 'N/A')}\n\n"
+                f"Metrics Report (for correlation):\n{state.get('metrics_report', 'N/A')}\n\n"
+                f"Logs Report (for correlation):\n{state.get('logs_report', 'N/A')}\n\n"
                 f"Focus your analysis on the directive above. Use your tools to investigate further."
             )
         response = await cicd_agent_app.ainvoke({"messages": [("user", input_message)]})
