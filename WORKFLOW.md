@@ -1,8 +1,8 @@
-# AgenticOps — Agent Workflow
+# AutoRCA — Agent Workflow
 
 ## Overview
 
-AgenticOps is a multi-agent AI system for IT Operations that autonomously detects anomalies, investigates incidents across logs and metrics, correlates events, and recommends resolutions. It is built with **LangGraph**, **LangChain**, and **FastAPI**, and uses a **ChromaDB** vector store for FAQ-based resolution lookups.
+AutoRCA is a multi-agent AI system for IT Operations that autonomously detects anomalies, investigates incidents across logs and metrics, correlates events, and recommends resolutions. It is built with **LangGraph**, **LangChain**, and **FastAPI**, and uses a **ChromaDB** vector store for FAQ-based resolution lookups.
 
 ---
 

@@ -1,4 +1,4 @@
-# AgenticOps
+# AutoRCA
 
 **Autonomous AI agents that investigate production incidents so you don't have to.**
 
@@ -6,7 +6,7 @@
 
 ## What is this?
 
-AgenticOps is a multi-agent system that acts like a tireless on-call engineer. You give it an incident description (e.g. "checkout latency spiked at 2pm"), and it autonomously:
+AutoRCA is a multi-agent system that acts like a tireless on-call engineer. You give it an incident description (e.g. "checkout latency spiked at 2pm"), and it autonomously:
 
 1. **Analyzes telemetry** — CPU, memory, latency, error rates, active sessions
 2. **Digs through application logs** — finds error bursts, stack traces, and patterns

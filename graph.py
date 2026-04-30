@@ -1,4 +1,4 @@
-# graph.py — AgenticOps Multi-Agent LangGraph Orchestrator
+# graph.py — AutoRCA Multi-Agent LangGraph Orchestrator
 
 import os
 import logging

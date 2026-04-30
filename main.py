@@ -1,4 +1,4 @@
-# main.py — AgenticOps FastAPI Entry Point
+# main.py — AutoRCA FastAPI Entry Point
 
 import logging
 import os
@@ -17,7 +17,7 @@ from graph import graph
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="AgenticOps API",
+    title="AutoRCA API",
     description="Multi-agent AI for IT Operations — Incident Detection & Resolution",
     version="1.0.0",
 )
@@ -31,7 +31,7 @@ class RequestModel(BaseModel):
 @app.get("/")
 async def home() -> dict:
     return {
-        "message": "AgenticOps API is running",
+        "message": "AutoRCA API is running",
         "endpoints": {
             "POST /run-agent": "Run the multi-agent analysis pipeline",
             "GET /health": "Health check",
@@ -47,7 +47,7 @@ async def health() -> dict:
 @app.post("/run-agent")
 async def run_agent(request: RequestModel):
     """
-    Run the full AgenticOps multi-agent pipeline.
+    Run the full AutoRCA multi-agent pipeline.
 
     The pipeline flow:
       commander -> metrics -> logs -> cicd -> resolver -> reporter -> END

@@ -2,7 +2,7 @@ import os
 
 import requests
 
-url = os.getenv("AGENTICOPS_URL", "http://localhost:8000/")
+url = os.getenv("AutoRCA_URL", "http://localhost:8000/")
 
 response = requests.post(
     f"{url}run-agent",
